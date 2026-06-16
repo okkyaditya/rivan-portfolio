@@ -29,16 +29,17 @@ type GalleryCanvasProps = {
    The result reads as a tidy, intentional "wall of screens" you can drag to
    spin around, like phantom.land's Work view. */
 
-const RADIUS = 9;
 const COLS = 20; // columns around the full 360° wrap
 const ROWS = 7; // stacked horizontal bands
 const CARD_W = 2.5;
 const CARD_H = 1.75;
-const GAP_X = 0.16; // horizontal gap (≈ half of the previous ~0.33)
-const GAP_Y = 0.275; // vertical gap (half of the previous 0.55)
-// radius derived so the horizontal arc spacing matches CARD_W + GAP_X
-const RADIUS = ((CARD_W + GAP_X) * COLS) / (2 * Math.PI);
-const ROW_SPACING = CARD_H + GAP_Y; // even vertical gap between rows
+const GAP_X = 0.16; // horizontal gap between cards (halved from ~0.33)
+const RADIUS = ((CARD_W + GAP_X) * COLS) / (2 * Math.PI); // cylinder radius derived from card+gap
+const ROW_SPACING = CARD_H + 0.275; // vertical gap (half of the previous 0.55)
+
+// Zoom-out effect on drag
+const ZOOM_OUT_DISTANCE = 2.2; // how far camera pulls back when dragging
+const ZOOM_LERP = 0.06; // smooth zoom interpolation
 
 // Look-control feel
 const LOOK_SPEED = 0.0022;
@@ -46,11 +47,6 @@ const LERP = 0.075; // the lenis-style easing
 const FRICTION = 0.94;
 const MAX_PITCH = (42 * Math.PI) / 180;
 const CLICK_THRESHOLD = 6; // px of movement below which a pointerup counts as a click
-
-// Dramatic zoom-out (wider FOV) while dragging, easing back when released
-const FOV_IDLE = 70;
-const FOV_DRAG = 92;
-const FOV_LERP = 0.08;
 
 type Placed = {
   project: Project;
@@ -95,9 +91,7 @@ function buildLayout(projects: Project[]): Placed[] {
 }
 
 function imageUrl(seed: string) {
-  // Images are served from your own files under /public/images/work/.
-  // Each project uses /public/images/work/<seed>.jpg (e.g. phantom-st.jpg).
-  return `/images/work/${seed}.jpg`;
+  return `https://picsum.photos/seed/${seed}/420/300`;
 }
 
 /* Card: plane with async-loaded texture + fallback gradient */
@@ -115,7 +109,7 @@ function Card({
     const loader = new THREE.TextureLoader();
     loader.setCrossOrigin("anonymous");
     let alive = true;
-    loader.load(imageUrl(placed.project.seed), (tex) => {
+    loader.load(imageUrl(placed.tileSeed), (tex) => {
       if (!alive) return;
       tex.colorSpace = THREE.SRGBColorSpace;
       setTexture(tex);
@@ -123,7 +117,7 @@ function Card({
     return () => {
       alive = false;
     };
-  }, [placed.project.seed]);
+  }, [placed.tileSeed]);
 
   const fallback = useMemo(() => {
     const canvas = document.createElement("canvas");
@@ -132,8 +126,8 @@ function Card({
     const ctx = canvas.getContext("2d");
     if (ctx) {
       const g = ctx.createLinearGradient(0, 0, 420, 300);
-      g.addColorStop(0, "#1a1a1f");
-      g.addColorStop(1, "#0a0a0d");
+      g.addColorStop(0, "#31363F");
+      g.addColorStop(1, "#222831");
       ctx.fillStyle = g;
       ctx.fillRect(0, 0, 420, 300);
     }
@@ -162,10 +156,15 @@ function Card({
           side={THREE.DoubleSide}
         />
       </mesh>
+      {/* subtle white border on every card */}
+      <lineSegments position={[0, 0, 0.005]}>
+        <edgesGeometry args={[new THREE.PlaneGeometry(CARD_W, CARD_H)]} />
+        <lineBasicMaterial color="#EEEEEE" transparent opacity={0.12} />
+      </lineSegments>
       {/* hover frame */}
       <mesh position={[0, 0, 0.01]} visible={hovered}>
         <planeGeometry args={[CARD_W + 0.08, CARD_H + 0.08]} />
-        <meshBasicMaterial color="#ffffff" transparent opacity={0.16} side={THREE.DoubleSide} />
+        <meshBasicMaterial color="#76ABAE" transparent opacity={0.28} side={THREE.DoubleSide} />
       </mesh>
     </group>
   );
@@ -176,6 +175,9 @@ function GalleryRig({ active, projects, onHover, onSelect }: GalleryCanvasProps)
   const groupRef = useRef<THREE.Group>(null);
   const { camera, gl, raycaster, pointer } = useThree();
   const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const lastPointer = useRef({ x: 0, y: 0 });
+  const hoverStable = useRef<string | null>(null);
+  const hoverFrames = useRef(0); // frames the new candidate has been consistent
 
   const ctrl = useRef({
     yaw: 0,
@@ -188,6 +190,7 @@ function GalleryRig({ active, projects, onHover, onSelect }: GalleryCanvasProps)
     lastX: 0,
     lastY: 0,
     movedDist: 0,
+    zoomOffset: 0, // current zoom-out distance
   });
 
   useEffect(() => {
@@ -270,33 +273,52 @@ function GalleryRig({ active, projects, onHover, onSelect }: GalleryCanvasProps)
     c.yaw = THREE.MathUtils.lerp(c.yaw, c.targetYaw, LERP);
     c.pitch = THREE.MathUtils.lerp(c.pitch, c.targetPitch, LERP);
 
+    // zoom-out effect: pull camera back along its local Z when dragging
+    const targetZoom = c.dragging ? ZOOM_OUT_DISTANCE : 0;
+    c.zoomOffset = THREE.MathUtils.lerp(c.zoomOffset, targetZoom, ZOOM_LERP);
+
     // look around from the center of the cylinder
     camera.rotation.order = "YXZ";
     camera.rotation.y = c.yaw;
     camera.rotation.x = c.pitch;
 
-    // dramatic zoom-out: widen FOV while dragging, ease back on release
-    if ((camera as THREE.PerspectiveCamera).isPerspectiveCamera) {
-      const cam = camera as THREE.PerspectiveCamera;
-      const targetFov = active && c.dragging ? FOV_DRAG : FOV_IDLE;
-      const nextFov = THREE.MathUtils.lerp(cam.fov, targetFov, FOV_LERP);
-      if (Math.abs(nextFov - cam.fov) > 0.01) {
-        cam.fov = nextFov;
-        cam.updateProjectionMatrix();
-      }
-    }
+    // apply zoom offset — camera stays at origin but moves back along its facing
+    camera.position.set(0, 0, 0);
+    const back = new THREE.Vector3(0, 0, 1).applyQuaternion(camera.quaternion);
+    camera.position.addScaledVector(back, c.zoomOffset);
 
-    // hover raycast
+    // hover raycast — only update when the pointer actually moved (avoids
+    // jitter from idle drift shifting the ray across card edges)
     if (active && groupRef.current) {
-      raycaster.setFromCamera(pointer, camera);
-      const hits = raycaster.intersectObjects(groupRef.current.children, true);
-      const ud = hits[0]?.object.parent?.userData as { projectId?: string } | undefined;
-      const id = ud?.projectId ?? null;
-      if (id !== hoveredId) {
-        setHoveredId(id);
-        onHover(id ? placed.find((p) => p.project.id === id)?.project ?? null : null);
+      const pointerMoved =
+        Math.abs(pointer.x - lastPointer.current.x) > 0.0001 ||
+        Math.abs(pointer.y - lastPointer.current.y) > 0.0001;
+      lastPointer.current.x = pointer.x;
+      lastPointer.current.y = pointer.y;
+
+      if (pointerMoved) {
+        raycaster.setFromCamera(pointer, camera);
+        const hits = raycaster.intersectObjects(groupRef.current.children, true);
+        const ud = hits[0]?.object.parent?.userData as { projectId?: string } | undefined;
+        const candidate = ud?.projectId ?? null;
+
+        // hysteresis: require the new candidate to be stable for a few frames
+        // before switching, prevents flicker at card borders
+        if (candidate === hoverStable.current) {
+          hoverFrames.current += 1;
+        } else {
+          hoverStable.current = candidate;
+          hoverFrames.current = 0;
+        }
+
+        const HOVER_THRESHOLD = 3; // frames before switching
+        if (candidate !== hoveredId && hoverFrames.current >= HOVER_THRESHOLD) {
+          setHoveredId(candidate);
+          onHover(candidate ? placed.find((p) => p.project.id === candidate)?.project ?? null : null);
+        }
       }
-      gl.domElement.style.cursor = c.dragging ? "grabbing" : id ? "pointer" : "grab";
+
+      gl.domElement.style.cursor = c.dragging ? "grabbing" : hoveredId ? "pointer" : "grab";
     }
   });
 
@@ -325,8 +347,8 @@ export function GalleryCanvas(props: GalleryCanvasProps) {
         dpr={[1, 2]}
         camera={{ fov: 70, near: 0.1, far: 100, position: [0, 0, 0] }}
       >
-        <color attach="background" args={["#050506"]} />
-        <fog attach="fog" args={["#050506", 8, 16]} />
+        <color attach="background" args={["#222831"]} />
+        <fog attach="fog" args={["#222831", 8, 16]} />
         <GalleryRig {...props} />
       </Canvas>
     </div>
