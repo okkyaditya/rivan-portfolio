@@ -28,7 +28,7 @@ const PROJECTS: Project[] = [
 
 const TAGLINE = "PHANTOM IS A TECHNOLOGY-LED CREATIVE AGENCY CRAFTING EXPERIENCES FOR GLOBAL BRANDS.";
 
-type NavKey = "work" | "about" | "careers";
+type NavKey = "work" | "about" | "awards";
 
 function useClock(timeZone: string) {
   const [time, setTime] = useState("--:--");
@@ -164,12 +164,12 @@ export function PortfolioExperience() {
               <h2 className="font-sans text-3xl font-semibold tracking-tight text-white md:text-5xl">
                 {nav === "about"
                   ? "A technology-led creative agency."
-                  : "Build the future of brand experiences."}
+                  : "Recognised work, awarded craft."}
               </h2>
               <p className="mx-auto mt-5 max-w-md text-xs leading-6 tracking-wide text-white/50">
                 {nav === "about"
                   ? "Phantom crafts immersive experiences for global brands, blending engineering and design into work that moves people."
-                  : "We're always looking for designers, engineers, and producers who want to push what's possible on the web."}
+                  : "Our work has been honoured at Cannes Lions, Awwwards, FWA, and The Webby Awards — recognition for craft that pushes the web forward."}
               </p>
             </div>
           </motion.section>
@@ -214,7 +214,7 @@ export function PortfolioExperience() {
           [
             { key: "work", label: "Work" },
             { key: "about", label: "About" },
-            { key: "careers", label: "Careers" },
+            { key: "awards", label: "Awards" },
           ] as { key: NavKey; label: string }[]
         ).map((item) => (
           <button
@@ -265,7 +265,7 @@ function ProjectDetail({ project, onClose }: { project: Project; onClose: () => 
     >
       <div
         className="absolute inset-0 bg-cover bg-center opacity-40"
-        style={{ backgroundImage: `url(https://picsum.photos/seed/${project.seed}/1600/900)` }}
+        style={{ backgroundImage: `url(/images/work/${project.seed}.jpg)` }}
       />
       <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(0,0,0,0.45),rgba(0,0,0,0.85))]" />
 
