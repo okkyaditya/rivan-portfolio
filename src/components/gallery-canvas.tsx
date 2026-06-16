@@ -29,12 +29,15 @@ type GalleryCanvasProps = {
    The result reads as a tidy, intentional "wall of screens" you can drag to
    spin around, like phantom.land's Work view. */
 
-const RADIUS = 9;
 const COLS = 20; // columns around the full 360° wrap
 const ROWS = 7; // stacked horizontal bands
 const CARD_W = 2.5;
 const CARD_H = 1.75;
-const ROW_SPACING = CARD_H + 0.55; // even vertical gap between rows
+const GAP_X = 0.16; // horizontal gap (≈ half of the previous ~0.33)
+const GAP_Y = 0.275; // vertical gap (half of the previous 0.55)
+// radius derived so the horizontal arc spacing matches CARD_W + GAP_X
+const RADIUS = ((CARD_W + GAP_X) * COLS) / (2 * Math.PI);
+const ROW_SPACING = CARD_H + GAP_Y; // even vertical gap between rows
 
 // Look-control feel
 const LOOK_SPEED = 0.0022;
@@ -42,6 +45,11 @@ const LERP = 0.075; // the lenis-style easing
 const FRICTION = 0.94;
 const MAX_PITCH = (42 * Math.PI) / 180;
 const CLICK_THRESHOLD = 6; // px of movement below which a pointerup counts as a click
+
+// Dramatic zoom-out (wider FOV) while dragging, easing back when released
+const FOV_IDLE = 70;
+const FOV_DRAG = 92;
+const FOV_LERP = 0.08;
 
 type Placed = {
   project: Project;
@@ -86,7 +94,9 @@ function buildLayout(projects: Project[]): Placed[] {
 }
 
 function imageUrl(seed: string) {
-  return `https://picsum.photos/seed/${seed}/420/300`;
+  // Images are served from your own files under /public/images/work/.
+  // Each project uses /public/images/work/<seed>.jpg (e.g. phantom-st.jpg).
+  return `/images/work/${seed}.jpg`;
 }
 
 /* Card: plane with async-loaded texture + fallback gradient */
@@ -104,7 +114,7 @@ function Card({
     const loader = new THREE.TextureLoader();
     loader.setCrossOrigin("anonymous");
     let alive = true;
-    loader.load(imageUrl(placed.tileSeed), (tex) => {
+    loader.load(imageUrl(placed.project.seed), (tex) => {
       if (!alive) return;
       tex.colorSpace = THREE.SRGBColorSpace;
       setTexture(tex);
@@ -112,7 +122,7 @@ function Card({
     return () => {
       alive = false;
     };
-  }, [placed.tileSeed]);
+  }, [placed.project.seed]);
 
   const fallback = useMemo(() => {
     const canvas = document.createElement("canvas");
@@ -263,6 +273,17 @@ function GalleryRig({ active, projects, onHover, onSelect }: GalleryCanvasProps)
     camera.rotation.order = "YXZ";
     camera.rotation.y = c.yaw;
     camera.rotation.x = c.pitch;
+
+    // dramatic zoom-out: widen FOV while dragging, ease back on release
+    if ((camera as THREE.PerspectiveCamera).isPerspectiveCamera) {
+      const cam = camera as THREE.PerspectiveCamera;
+      const targetFov = active && c.dragging ? FOV_DRAG : FOV_IDLE;
+      const nextFov = THREE.MathUtils.lerp(cam.fov, targetFov, FOV_LERP);
+      if (Math.abs(nextFov - cam.fov) > 0.01) {
+        cam.fov = nextFov;
+        cam.updateProjectionMatrix();
+      }
+    }
 
     // hover raycast
     if (active && groupRef.current) {
