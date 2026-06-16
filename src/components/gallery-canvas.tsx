@@ -21,23 +21,26 @@ type GalleryCanvasProps = {
   onSelect: (project: Project) => void;
 };
 
-/* ── Flat grid layout ──
-   Cards are placed on a flat plane (wall) with uniform spacing.
-   Camera sits in front and pans across to explore. All cards
-   are the same size, evenly spaced, with no tilt or rotation. */
+/* ── Cylindrical-wall layout ──
+   Camera sits at the origin and looks around. Cards are placed on the inner
+   surface of a CYLINDER (not a sphere) so every row shares the same radius.
+   That keeps horizontal gaps even across all rows, rows perfectly level, and
+   each card only yaws to face the central axis — no per-card vertical tilt.
+   The result reads as a tidy, intentional "wall of screens" you can drag to
+   spin around, like phantom.land's Work view. */
 
-const COLS = 20; // columns in the grid
-const ROWS = 9; // rows in the grid
+const RADIUS = 9;
+const COLS = 20; // columns around the full 360° wrap
+const ROWS = 7; // stacked horizontal bands
 const CARD_W = 2.5;
 const CARD_H = 1.75;
-const GAP_X = 0.3; // horizontal gap between cards
-const GAP_Y = 0.3; // vertical gap between cards
-const CAMERA_Z = 8; // distance of camera from the wall
+const ROW_SPACING = CARD_H + 0.55; // even vertical gap between rows
 
 // Look-control feel
-const PAN_SPEED = 0.012;
+const LOOK_SPEED = 0.0022;
 const LERP = 0.075; // the lenis-style easing
 const FRICTION = 0.94;
+const MAX_PITCH = (42 * Math.PI) / 180;
 const CLICK_THRESHOLD = 6; // px of movement below which a pointerup counts as a click
 
 type Placed = {
@@ -49,26 +52,33 @@ type Placed = {
 
 function buildLayout(projects: Project[]): Placed[] {
   const placed: Placed[] = [];
-  // All cards face +Z (toward the camera), no rotation needed
-  const quaternion = new THREE.Quaternion(); // identity quaternion = no rotation
+  const up = new THREE.Vector3(0, 1, 0);
   let i = 0;
 
-  // Calculate total grid dimensions to center it
-  const cellW = CARD_W + GAP_X;
-  const cellH = CARD_H + GAP_Y;
-  const totalW = COLS * cellW - GAP_X;
-  const totalH = ROWS * cellH - GAP_Y;
+  // center the stack of rows vertically around y = 0
+  const totalH = (ROWS - 1) * ROW_SPACING;
 
   for (let row = 0; row < ROWS; row += 1) {
+    const y = row * ROW_SPACING - totalH / 2;
+
     for (let col = 0; col < COLS; col += 1) {
-      // Position cards in a flat grid centered at origin on the XY plane at z=0
-      const x = col * cellW - totalW / 2 + CARD_W / 2;
-      const y = -(row * cellH - totalH / 2 + CARD_H / 2); // top-down row order
-      const z = 0;
+      // even angular spacing around the full circle — no alternating offset,
+      // so columns stay vertically aligned and the grid reads as clean
+      const azimuth = (col / COLS) * Math.PI * 2;
+
+      const x = RADIUS * Math.sin(azimuth);
+      const z = RADIUS * Math.cos(azimuth);
       const position = new THREE.Vector3(x, y, z);
 
+      // face the central axis at the SAME height -> yaw-only rotation.
+      // every card stays upright and level (no vertical tilt).
+      const target = new THREE.Vector3(0, y, 0);
+      const m = new THREE.Matrix4().lookAt(position, target, up);
+      const quaternion = new THREE.Quaternion().setFromRotationMatrix(m);
+
       const project = projects[i % projects.length];
-      placed.push({ project, position, quaternion: quaternion.clone(), tileSeed: `${project.seed}-${row}-${col}` });
+      // distinct image per tile so the wall doesn't read as a repeating loop
+      placed.push({ project, position, quaternion, tileSeed: `${project.seed}-${row}-${col}` });
       i += 1;
     }
   }
@@ -156,22 +166,13 @@ function GalleryRig({ active, projects, onHover, onSelect }: GalleryCanvasProps)
   const { camera, gl, raycaster, pointer } = useThree();
   const [hoveredId, setHoveredId] = useState<string | null>(null);
 
-  // Calculate bounds for clamping camera pan
-  const bounds = useMemo(() => {
-    const cellW = CARD_W + GAP_X;
-    const cellH = CARD_H + GAP_Y;
-    const totalW = COLS * cellW - GAP_X;
-    const totalH = ROWS * cellH - GAP_Y;
-    return { halfW: totalW / 2, halfH: totalH / 2 };
-  }, []);
-
   const ctrl = useRef({
-    x: 0,
-    y: 0,
-    targetX: 0,
-    targetY: 0,
-    velX: 0,
-    velY: 0,
+    yaw: 0,
+    pitch: 0,
+    targetYaw: 0,
+    targetPitch: 0,
+    velYaw: 0,
+    velPitch: 0,
     dragging: false,
     lastX: 0,
     lastY: 0,
@@ -179,8 +180,7 @@ function GalleryRig({ active, projects, onHover, onSelect }: GalleryCanvasProps)
   });
 
   useEffect(() => {
-    camera.position.set(0, 0, CAMERA_Z);
-    camera.lookAt(0, 0, 0);
+    camera.position.set(0, 0, 0);
   }, [camera]);
 
   useEffect(() => {
@@ -193,8 +193,8 @@ function GalleryRig({ active, projects, onHover, onSelect }: GalleryCanvasProps)
       c.lastX = e.clientX;
       c.lastY = e.clientY;
       c.movedDist = 0;
-      c.velX = 0;
-      c.velY = 0;
+      c.velYaw = 0;
+      c.velPitch = 0;
       el.setPointerCapture?.(e.pointerId);
     };
 
@@ -205,14 +205,12 @@ function GalleryRig({ active, projects, onHover, onSelect }: GalleryCanvasProps)
       const dx = e.clientX - c.lastX;
       const dy = e.clientY - c.lastY;
       c.movedDist += Math.abs(dx) + Math.abs(dy);
-      // drag right -> camera moves left (content moves right): natural "grab the world"
-      c.targetX -= dx * PAN_SPEED;
-      c.targetY += dy * PAN_SPEED;
-      // Clamp within grid bounds
-      c.targetX = THREE.MathUtils.clamp(c.targetX, -bounds.halfW, bounds.halfW);
-      c.targetY = THREE.MathUtils.clamp(c.targetY, -bounds.halfH, bounds.halfH);
-      c.velX = -dx * PAN_SPEED;
-      c.velY = dy * PAN_SPEED;
+      // drag right -> look right (content moves left): natural "grab the world"
+      c.targetYaw += dx * LOOK_SPEED;
+      c.targetPitch += dy * LOOK_SPEED;
+      c.targetPitch = THREE.MathUtils.clamp(c.targetPitch, -MAX_PITCH, MAX_PITCH);
+      c.velYaw = dx * LOOK_SPEED;
+      c.velPitch = dy * LOOK_SPEED;
       c.lastX = e.clientX;
       c.lastY = e.clientY;
     };
@@ -239,29 +237,32 @@ function GalleryRig({ active, projects, onHover, onSelect }: GalleryCanvasProps)
       window.removeEventListener("pointerup", onUp);
       window.removeEventListener("pointercancel", onUp);
     };
-  }, [active, gl, hoveredId, placed, onSelect, bounds]);
+  }, [active, gl, hoveredId, placed, onSelect]);
 
   useFrame(() => {
     const c = ctrl.current;
 
     // inertia glide after release
     if (active && !c.dragging) {
-      c.targetX += c.velX;
-      c.targetY += c.velY;
-      // Clamp within grid bounds
-      c.targetX = THREE.MathUtils.clamp(c.targetX, -bounds.halfW, bounds.halfW);
-      c.targetY = THREE.MathUtils.clamp(c.targetY, -bounds.halfH, bounds.halfH);
-      c.velX *= FRICTION;
-      c.velY *= FRICTION;
+      c.targetYaw += c.velYaw;
+      c.targetPitch += c.velPitch;
+      c.targetPitch = THREE.MathUtils.clamp(c.targetPitch, -MAX_PITCH, MAX_PITCH);
+      c.velYaw *= FRICTION;
+      c.velPitch *= FRICTION;
     }
 
-    c.x = THREE.MathUtils.lerp(c.x, c.targetX, LERP);
-    c.y = THREE.MathUtils.lerp(c.y, c.targetY, LERP);
+    // very subtle idle drift so the wall feels alive
+    if (active && !c.dragging && Math.abs(c.velYaw) < 0.0002) {
+      c.targetYaw += 0.0004;
+    }
 
-    // pan the camera across the flat wall
-    camera.position.x = c.x;
-    camera.position.y = c.y;
-    camera.position.z = CAMERA_Z;
+    c.yaw = THREE.MathUtils.lerp(c.yaw, c.targetYaw, LERP);
+    c.pitch = THREE.MathUtils.lerp(c.pitch, c.targetPitch, LERP);
+
+    // look around from the center of the cylinder
+    camera.rotation.order = "YXZ";
+    camera.rotation.y = c.yaw;
+    camera.rotation.x = c.pitch;
 
     // hover raycast
     if (active && groupRef.current) {
@@ -300,10 +301,10 @@ export function GalleryCanvas(props: GalleryCanvasProps) {
       <Canvas
         gl={{ antialias: true, alpha: false, powerPreference: "high-performance" }}
         dpr={[1, 2]}
-        camera={{ fov: 70, near: 0.1, far: 100, position: [0, 0, CAMERA_Z] }}
+        camera={{ fov: 70, near: 0.1, far: 100, position: [0, 0, 0] }}
       >
         <color attach="background" args={["#050506"]} />
-        <fog attach="fog" args={["#050506", 12, 30]} />
+        <fog attach="fog" args={["#050506", 8, 16]} />
         <GalleryRig {...props} />
       </Canvas>
     </div>
