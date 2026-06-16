@@ -29,6 +29,7 @@ type GalleryCanvasProps = {
    The result reads as a tidy, intentional "wall of screens" you can drag to
    spin around, like phantom.land's Work view. */
 
+const RADIUS = 9;
 const COLS = 20; // columns around the full 360° wrap
 const ROWS = 7; // stacked horizontal bands
 const CARD_W = 2.5;
