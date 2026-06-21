@@ -500,7 +500,7 @@ export function PortfolioExperience() {
               initial={{ scale: 1, opacity: 0 }}
               animate={{
                 scale: [1, 1.08, 1],
-                opacity: 0.35,
+                opacity: 0.48,
               }}
               transition={{
                 scale: { duration: 35, repeat: Infinity, ease: "easeInOut" },
@@ -516,7 +516,7 @@ export function PortfolioExperience() {
               initial={{ scale: 1, opacity: 0 }}
               animate={{
                 scale: [1, 1.08, 1],
-                opacity: 0.35,
+                opacity: 0.48,
               }}
               transition={{
                 scale: { duration: 35, repeat: Infinity, ease: "easeInOut" },
@@ -527,7 +527,7 @@ export function PortfolioExperience() {
                 backgroundImage: `url(/images/homebg-mobile.png)`,
               }}
             />
-            <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(5,5,6,0.55)_30%,rgba(5,5,6,0.92)_100%)]" />
+            <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(5,5,6,0.3)_30%,rgba(5,5,6,0.78)_100%)]" />
 
             <div className="relative z-10 max-w-2xl text-center">
               <motion.p
